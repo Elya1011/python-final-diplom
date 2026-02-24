@@ -1,7 +1,7 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
 
-from backend.models import User, Shop, Category, Product, ProductInfo, Parameter, ProductParameter, Order, OrderItem, \
+from .models import User, Shop, Category, Product, ProductInfo, Parameter, ProductParameter, Order, OrderItem, \
     Contact, ConfirmEmailToken
 
 
@@ -25,12 +25,27 @@ class CustomUserAdmin(UserAdmin):
 
 @admin.register(Shop)
 class ShopAdmin(admin.ModelAdmin):
-    pass
+    """
+    Панель управления магазинами
+    """
+    model = Shop
 
 
 @admin.register(Category)
 class CategoryAdmin(admin.ModelAdmin):
-    pass
+    """
+    Панель управления категориями
+    """
+    model = Category
+    list_display = ['name', 'get_shops_count']
+    list_filter = ['shops']
+    search_fields = ['name']
+    filter_horizontal = ['shops']
+    ordering = ['name']
+    
+    def get_shops_count(self, obj):
+        return obj.shops.count()
+    get_shops_count.short_description = 'Количество магазинов'
 
 
 @admin.register(Product)
