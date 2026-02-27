@@ -6,18 +6,16 @@ from django.core.validators import URLValidator
 from django.db import IntegrityError
 from django.db.models import Q, Sum, F
 from django.http import JsonResponse
-from requests import get
 from rest_framework.authtoken.models import Token
 from rest_framework.generics import ListAPIView
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from ujson import loads as load_json
-from yaml import load as load_yaml, Loader
-from .models import Shop, Category, Product, ProductInfo, Parameter, ProductParameter, Order, OrderItem, \
-    Contact, ConfirmEmailToken
+from .models import Shop, Category, ProductInfo, Order, OrderItem, Contact, ConfirmEmailToken
 from .serializers import UserSerializer, CategorySerializer, ShopSerializer, ProductInfoSerializer, \
     OrderItemSerializer, OrderSerializer, ContactSerializer
-from .signals import new_user_registered, new_order
+from .signals import new_order
+from .tasks import import_price_list_task, mass_delete_task
 
 
 def strtobool(val):
@@ -38,7 +36,7 @@ class RegisterAccount(APIView):
 
     # Регистрация методом POST
 
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
             Process a POST request and create a new user.
 
@@ -52,7 +50,6 @@ class RegisterAccount(APIView):
         if {'first_name', 'last_name', 'email', 'password', 'company', 'position'}.issubset(request.data):
 
             # проверяем пароль на сложность
-            sad = 'asd'
             try:
                 validate_password(request.data['password'])
             except Exception as password_error:
@@ -83,7 +80,7 @@ class ConfirmAccount(APIView):
     """
 
     # Регистрация методом POST
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
                 Подтверждает почтовый адрес пользователя.
 
@@ -122,7 +119,7 @@ class AccountDetails(APIView):
     """
 
     # получить данные
-    def get(self, request: Request, *args, **kwargs):
+    def get(self, request: Request, *args, **kwargs): # noqa: unused-argument
         """
                Retrieve the details of the authenticated user.
 
@@ -139,7 +136,7 @@ class AccountDetails(APIView):
         return Response(serializer.data)
 
     # Редактирование методом POST
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
                 Update the account details of the authenticated user.
 
@@ -154,7 +151,6 @@ class AccountDetails(APIView):
         # проверяем обязательные аргументы
 
         if 'password' in request.data:
-            errors = {}
             # проверяем пароль на сложность
             try:
                 validate_password(request.data['password'])
@@ -182,7 +178,7 @@ class LoginAccount(APIView):
     """
 
     # Авторизация методом POST
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
                 Authenticate a user.
 
@@ -197,7 +193,7 @@ class LoginAccount(APIView):
 
             if user is not None:
                 if user.is_active:
-                    token, _ = Token.objects.get_or_create(user=user)
+                    token, _ = Token.objects.get_or_create(user=user) # noqa
 
                     return JsonResponse({'Status': True, 'Token': token.key})
 
@@ -233,7 +229,7 @@ class ProductInfoView(APIView):
         - None
         """
 
-    def get(self, request: Request, *args, **kwargs):
+    def get(self, request: Request, *args, **kwargs): # noqa: unused-argument
         """
                Retrieve the product information based on the specified filters.
 
@@ -253,7 +249,7 @@ class ProductInfoView(APIView):
         if category_id:
             query = query & Q(product__category_id=category_id)
 
-        # фильтруем и отбрасываем дуликаты
+        # фильтруем и отбрасываем дубликаты
         queryset = ProductInfo.objects.filter(
             query).select_related(
             'shop', 'product__category').prefetch_related(
@@ -279,7 +275,7 @@ class BasketView(APIView):
     """
 
     # получить корзину
-    def get(self, request, *args, **kwargs):
+    def get(self, request, *args, **kwargs): # noqa: unused-argument
         """
                 Retrieve the items in the user's basket.
 
@@ -301,7 +297,7 @@ class BasketView(APIView):
         return Response(serializer.data)
 
     # редактировать корзину
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Add an items to the user's basket.
 
@@ -342,7 +338,7 @@ class BasketView(APIView):
         return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
 
     # удалить товары из корзины
-    def delete(self, request, *args, **kwargs):
+    def delete(self, request, *args, **kwargs): # noqa: unused-argument
         """
                 Remove  items from the user's basket.
 
@@ -367,12 +363,14 @@ class BasketView(APIView):
                     objects_deleted = True
 
             if objects_deleted:
-                deleted_count = OrderItem.objects.filter(query).delete()[0]
-                return JsonResponse({'Status': True, 'Удалено объектов': deleted_count})
+                # Запускаем задачу массового удаления через Celery
+                task = mass_delete_task.delay('OrderItem', {'order_id': basket.id,
+                                            'id__in': [int(item_id) for item_id in items_list if item_id.isdigit()]})
+                return JsonResponse({'Status': True, 'Task ID': task.id, 'Message': 'Mass delete task started'})
         return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
 
     # добавить позиции в корзину
-    def put(self, request, *args, **kwargs):
+    def put(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Update the items in the user's basket.
 
@@ -414,7 +412,7 @@ class PartnerUpdate(APIView):
     - None
     """
 
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
                 Update the partner price list information.
 
@@ -438,33 +436,9 @@ class PartnerUpdate(APIView):
             except ValidationError as e:
                 return JsonResponse({'Status': False, 'Error': str(e)})
             else:
-                stream = get(url).content
-
-                data = load_yaml(stream, Loader=Loader)
-
-                shop, _ = Shop.objects.get_or_create(name=data['shop'], user_id=request.user.id)
-                for category in data['categories']:
-                    category_object, _ = Category.objects.get_or_create(id=category['id'], name=category['name'])
-                    category_object.shops.add(shop.id)
-                    category_object.save()
-                ProductInfo.objects.filter(shop_id=shop.id).delete()
-                for item in data['goods']:
-                    product, _ = Product.objects.get_or_create(name=item['name'], category_id=item['category'])
-
-                    product_info = ProductInfo.objects.create(product_id=product.id,
-                                                              external_id=item['id'],
-                                                              model=item['model'],
-                                                              price=item['price'],
-                                                              price_rrc=item['price_rrc'],
-                                                              quantity=item['quantity'],
-                                                              shop_id=shop.id)
-                    for name, value in item['parameters'].items():
-                        parameter_object, _ = Parameter.objects.get_or_create(name=name)
-                        ProductParameter.objects.create(product_info_id=product_info.id,
-                                                        parameter_id=parameter_object.id,
-                                                        value=value)
-
-                return JsonResponse({'Status': True})
+                # Запускаем задачу импорта прайс-листа через Celery
+                task = import_price_list_task.delay(request.user.id, url)
+                return JsonResponse({'Status': True, 'Task ID': task.id, 'Message': 'Price list import task started'})
 
         return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
 
@@ -480,7 +454,7 @@ class PartnerState(APIView):
        - None
        """
     # получить текущий статус
-    def get(self, request, *args, **kwargs):
+    def get(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Retrieve the state of the partner.
 
@@ -501,7 +475,7 @@ class PartnerState(APIView):
         return Response(serializer.data)
 
     # изменить текущий статус
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Update the state of a partner.
 
@@ -537,7 +511,7 @@ class PartnerOrders(APIView):
     - None
     """
 
-    def get(self, request, *args, **kwargs):
+    def get(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Retrieve the orders associated with the authenticated partner.
 
@@ -578,7 +552,7 @@ class ContactView(APIView):
        """
 
     # получить мои контакты
-    def get(self, request, *args, **kwargs):
+    def get(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Retrieve the contact information of the authenticated user.
 
@@ -596,7 +570,7 @@ class ContactView(APIView):
         return Response(serializer.data)
 
     # добавить новый контакт
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Create a new contact for the authenticated user.
 
@@ -623,7 +597,7 @@ class ContactView(APIView):
         return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
 
     # удалить контакт
-    def delete(self, request, *args, **kwargs):
+    def delete(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Delete the contact of the authenticated user.
 
@@ -647,12 +621,14 @@ class ContactView(APIView):
                     objects_deleted = True
 
             if objects_deleted:
-                deleted_count = Contact.objects.filter(query).delete()[0]
-                return JsonResponse({'Status': True, 'Удалено объектов': deleted_count})
+                # Запускаем задачу массового удаления через Celery
+                task = mass_delete_task.delay('Contact', {'user_id': request.user.id,
+                                            'id__in': [int(item_id) for item_id in items_list if item_id.isdigit()]})
+                return JsonResponse({'Status': True, 'Task ID': task.id, 'Message': 'Mass delete task started'})
         return JsonResponse({'Status': False, 'Errors': 'Не указаны все необходимые аргументы'})
 
     # редактировать контакт
-    def put(self, request, *args, **kwargs):
+    def put(self, request, *args, **kwargs): # noqa: unused-argument
         if not request.user.is_authenticated:
             """
                    Update the contact information of the authenticated user.
@@ -682,7 +658,7 @@ class ContactView(APIView):
 
 class OrderView(APIView):
     """
-    Класс для получения и размешения заказов пользователями
+    Класс для получения и размещения заказов пользователями
     Methods:
     - get: Retrieve the details of a specific order.
     - post: Create a new order.
@@ -694,7 +670,7 @@ class OrderView(APIView):
     """
 
     # получить мои заказы
-    def get(self, request, *args, **kwargs):
+    def get(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Retrieve the details of user orders.
 
@@ -716,7 +692,7 @@ class OrderView(APIView):
         return Response(serializer.data)
 
     # разместить заказ из корзины
-    def post(self, request, *args, **kwargs):
+    def post(self, request, *args, **kwargs): # noqa: unused-argument
         """
                Put an order and send a notification.
 
