@@ -1,0 +1,47 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.Python
+env
+pip-log.txt
+pip-delete-this-directory.txt
+.venv
+venv/
+ENV/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Django
+*.log
+
+# Media files
+media/
+
+# Static files (will be collected in container)
+staticfiles/
+
+# Environment variables
+.env
+.env.local
+.env.production
+
+# Docker
+Dockerfile
+docker-compose.yml
+docker-compose.override.yml
