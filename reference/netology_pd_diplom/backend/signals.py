@@ -1,9 +1,9 @@
 from django.db.models.signals import post_save
 from django.dispatch import receiver, Signal
 from django_rest_passwordreset.signals import reset_password_token_created
+
 from .models import User
 from .tasks import send_password_reset_email, send_confirmation_email, send_order_status_email
-
 
 new_order = Signal()
 

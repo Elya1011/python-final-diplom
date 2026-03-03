@@ -1,14 +1,14 @@
 from celery import shared_task
-from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.core.validators import URLValidator
 from django.core.exceptions import ValidationError
+from django.core.mail import EmailMultiAlternatives
+from django.core.validators import URLValidator
 from requests import get
 from yaml import load as load_yaml, Loader
+
 from .models import (ConfirmEmailToken, OrderItem, Contact, Shop, Category, Product, ProductInfo, Parameter,
                      ProductParameter)
-
 
 User = get_user_model()
 
