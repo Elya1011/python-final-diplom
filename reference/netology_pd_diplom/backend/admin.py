@@ -1,7 +1,9 @@
 from django.contrib import admin
 from django.contrib.auth.admin import UserAdmin
+
 from .models import User, Shop, Category, Product, ProductInfo, Parameter, ProductParameter, Order, OrderItem, \
-    Contact, ConfirmEmailToken
+    Contact, ConfirmEmailToken, STATE_CHOICES
+from .tasks import send_order_status_email
 
 
 @admin.register(User)
@@ -113,6 +115,45 @@ class OrderAdmin(admin.ModelAdmin):
     list_display = ['user', 'state', 'contact', 'dt']
     list_filter = ['state', 'dt']
     search_fields = ['user__email', 'user__first_name', 'user__last_name']
+
+    def get_status_actions(self):
+        """Динамически создает действия для изменения статуса заказа"""
+        actions = []
+        for status_value, status_name in STATE_CHOICES:
+            if status_value != 'basket':  # Исключаем статус корзины
+                action_name = f'change_status_to_{status_value}'
+
+                def make_action(status):
+                    status_display = dict(STATE_CHOICES)[status]
+
+                    def action(self, request, queryset):
+                        updated = queryset.update(state=status)
+                        self.message_user(request, f'Статус изменён на "{status_display}" для {updated} заказов')
+                    action.short_description = f'Изменить статус на "{status_display}"'
+                    action.__name__ = f'change_status_to_{status}'
+                    return action
+
+                setattr(self.__class__, action_name, make_action(status_value))
+                actions.append(action_name)
+        
+        return actions
+
+    def get_actions(self, request):
+        """Добавляет динамические действия в список действий"""
+        actions = super().get_actions(request)
+        for action_name in self.get_status_actions():
+            func = getattr(self.__class__, action_name)
+            actions[action_name] = (func, action_name, func.short_description)
+        return actions
+
+    def notify_customer(self, request, queryset):
+        count = 0
+        for order in queryset:
+            send_order_status_email.delay(order.user.id, order.state)
+            count += 1
+        self.message_user(request, f'Уведомления отправлены для {count} заказов.')
+
+    notify_customer.short_description = "Отправить уведомление клиенту о статусе"
 
 
 @admin.register(OrderItem)
